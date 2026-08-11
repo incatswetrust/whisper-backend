@@ -18,7 +18,15 @@ app.use(
   cors({
     origin: config.frontendOrigins,
     allowHeaders: ['content-type', 'x-password', 'x-views', 'x-ttl-minutes', 'x-allowed-ip', 'x-filename', 'x-encrypted'],
-    exposeHeaders: ['x-views-remaining', 'x-alg', 'x-iv', 'x-auth-tag', 'x-salt', 'x-has-password'],
+    exposeHeaders: [
+      'x-views-remaining',
+      'x-alg',
+      'x-iv',
+      'x-auth-tag',
+      'x-salt',
+      'x-has-password',
+      'content-disposition'
+    ],
     allowMethods: ['GET', 'POST']
   })
 );
