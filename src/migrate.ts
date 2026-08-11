@@ -13,7 +13,11 @@ async function main() {
   for (const file of files) {
     console.log(`applying ${file}`);
     const content = readFileSync(path.join(migrationsDir, file), 'utf8');
-    const statements = content
+    const withoutComments = content
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('--'))
+      .join('\n');
+    const statements = withoutComments
       .split(';')
       .map((s) => s.trim())
       .filter(Boolean);
