@@ -10,8 +10,16 @@ export function getClientIp(c: Context): string {
       if (first) return normalize(first);
     }
   }
-  const info = getConnInfo(c);
-  return normalize(info.remote.address ?? 'unknown');
+  // Only meaningful for local dev via @hono/node-server — Vercel's own
+  // Hono hosting doesn't provide the connection info this expects, so it
+  // throws there. Always trustProxy=true on Vercel (see config.ts) means
+  // this fallback is local-dev-only in practice, but keep it defensive.
+  try {
+    const info = getConnInfo(c);
+    return normalize(info.remote.address ?? 'unknown');
+  } catch {
+    return 'unknown';
+  }
 }
 
 function normalize(ip: string): string {
