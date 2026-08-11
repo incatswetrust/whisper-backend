@@ -7,7 +7,7 @@ import { store } from './store.js';
 export const app = new Hono();
 
 app.use(
-  '/api/*',
+  '*',
   cors({
     origin: config.frontendOrigins,
     allowHeaders: ['content-type', 'x-password', 'x-views', 'x-ttl-minutes', 'x-allowed-ip', 'x-filename', 'x-encrypted'],
@@ -16,5 +16,5 @@ app.use(
   })
 );
 
-app.get('/api/health', async (c) => c.json(await store.stats()));
-app.route('/api/notes', notes);
+app.get('/health', async (c) => c.json(await store.stats()));
+app.route('/notes', notes);

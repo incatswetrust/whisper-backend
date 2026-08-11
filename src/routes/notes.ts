@@ -115,8 +115,8 @@ notes.post(
         client_encrypted: clientEncrypted,
         views_remaining: record.viewsRemaining,
         expires_at: new Date(record.expiresAt).toISOString(),
-        url_raw: `${origin}/api/notes/${id}`,
-        url_decrypted: responseKey ? `${origin}/api/notes/${id}?key=${responseKey}` : null
+        url_raw: `${origin}/notes/${id}`,
+        url_decrypted: responseKey ? `${origin}/notes/${id}?key=${responseKey}` : null
       },
       201
     );

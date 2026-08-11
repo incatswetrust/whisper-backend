@@ -22,16 +22,20 @@ Config is via env vars (see `src/config.ts`): `DATABASE_URL` (or
 
 ## Deploying to Vercel
 
-`api/[[...route]].ts` wraps the same Hono app with `hono/vercel`'s `handle()`
-and forces the Node.js runtime (not Edge — password hashing needs
-`node:crypto`'s `scryptSync`, which Edge's Web Crypto subset doesn't have).
-`vercel.json` rewrites every path to `/api`, since the file-based catch-all
-(`api/[[...route]].ts`) only matches `/api/*` on its own — without the
-rewrite, requests to `/` or any other non-`/api` path (health checks,
-`/favicon.ico`, ...) don't match any function and Vercel falls back to
-guessing, which fails with `FUNCTION_INVOCATION_FAILED`. The Hono app's own
-routes are still full `/api/...` paths, so this is purely about getting
-traffic to the function at all.
+The app's own routes (`/health`, `/notes`, `/notes/:id`) have no `/api`
+prefix — `api.whisper.beer/notes`, not `api.whisper.beer/api/notes`, since
+the subdomain already says "this is the API." Vercel functions can only
+live under `/api` though, so `api/[[...route]].ts` mounts the app under
+`/api` internally (`new Hono().route('/api', app)`), and `vercel.json`
+rewrites every public path to its `/api/...` counterpart so that internal
+prefix never shows up outside this repo. It also forces the Node.js runtime
+(not Edge — password hashing needs `node:crypto`'s `scryptSync`, which
+Edge's Web Crypto subset doesn't have) and restricts Vercel's function
+detection to `api/**/*.ts` — without that, Vercel's zero-config detection
+also builds `src/index.ts` (the local dev entry, which just starts a
+long-running `@hono/node-server` listener) as a second, broken function,
+and traffic randomly hitting it either hangs or crashes with
+`FUNCTION_INVOCATION_FAILED`.
 
 1. Connect a Neon Postgres database to the project (Vercel Marketplace →
    Neon) — this sets `DATABASE_URL` automatically.
@@ -68,7 +72,7 @@ If you set a password, it's mixed into the encryption key via scrypt + HMAC
 there's no separate password hash to attack. `allowed_ip` is a separate,
 non-cryptographic network gate checked before any content is served.
 
-## Creating a note — `POST /api/notes`
+## Creating a note — `POST /notes`
 
 Body is the raw payload (text or file bytes). Everything else is headers so
 the whole thing works cleanly with `curl --data-binary`.
@@ -85,13 +89,13 @@ the whole thing works cleanly with `curl --data-binary`.
 
 ```bash
 # simplest: one-shot secret text
-curl -X POST http://localhost:8787/api/notes \
+curl -X POST http://localhost:8787/notes \
   -H "Content-Type: text/plain" \
   --data-binary "the launch code is 1234"
-# => { "id": "...", "key": "...", "url_decrypted": "http://.../api/notes/ID?key=KEY", ... }
+# => { "id": "...", "key": "...", "url_decrypted": "http://.../notes/ID?key=KEY", ... }
 
 # a file, password-protected, 5 views, expires in 60 minutes
-curl -X POST http://localhost:8787/api/notes \
+curl -X POST http://localhost:8787/notes \
   -H "Content-Type: application/pdf" \
   -H "X-Filename: contract.pdf" \
   -H "X-Password: hunter2" \
@@ -100,22 +104,22 @@ curl -X POST http://localhost:8787/api/notes \
   --data-binary @contract.pdf
 
 # restrict who can ever fetch it
-curl -X POST http://localhost:8787/api/notes \
+curl -X POST http://localhost:8787/notes \
   -H "Content-Type: text/plain" \
   -H "X-Allowed-IP: 203.0.113.4,198.51.100.0/24" \
   --data-binary "only for the office network"
 ```
 
-## Reading a note — `GET /api/notes/:id`
+## Reading a note — `GET /notes/:id`
 
 ```bash
 # the easy way: server decrypts for you, streams the content back
-curl "http://localhost:8787/api/notes/ID?key=KEY" -o downloaded_file
-curl "http://localhost:8787/api/notes/ID?key=KEY" -H "X-Password: hunter2"
+curl "http://localhost:8787/notes/ID?key=KEY" -o downloaded_file
+curl "http://localhost:8787/notes/ID?key=KEY" -H "X-Password: hunter2"
 
 # the paranoid way: fetch raw ciphertext, decrypt locally, key never
 # touches the network at read time
-curl -D headers.txt -o note.enc "http://localhost:8787/api/notes/ID"
+curl -D headers.txt -o note.enc "http://localhost:8787/notes/ID"
 # headers.txt now has X-Iv / X-Auth-Tag / X-Salt (if a password was set) / X-Alg
 # decrypt with openssl (password case needs the same scrypt+HMAC combine —
 # see src/crypto.ts combineKey — a plain openssl one-liner only covers the
