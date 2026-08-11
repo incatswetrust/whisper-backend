@@ -18,3 +18,6 @@ app.use(
 
 app.get('/health', async (c) => c.json(await store.stats()));
 app.route('/notes', notes);
+
+// Vercel's zero-config Hono detection requires a default export.
+export default app;
