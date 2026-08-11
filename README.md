@@ -22,20 +22,20 @@ Config is via env vars (see `src/config.ts`): `DATABASE_URL` (or
 
 ## Deploying to Vercel
 
-The app's own routes (`/health`, `/notes`, `/notes/:id`) have no `/api`
-prefix — `api.whisper.beer/notes`, not `api.whisper.beer/api/notes`, since
-the subdomain already says "this is the API." Vercel functions can only
-live under `/api` though, so `api/[[...route]].ts` mounts the app under
-`/api` internally (`new Hono().route('/api', app)`), and `vercel.json`
-rewrites every public path to its `/api/...` counterpart so that internal
-prefix never shows up outside this repo. It also forces the Node.js runtime
-(not Edge — password hashing needs `node:crypto`'s `scryptSync`, which
-Edge's Web Crypto subset doesn't have) and restricts Vercel's function
-detection to `api/**/*.ts` — without that, Vercel's zero-config detection
-also builds `src/index.ts` (the local dev entry, which just starts a
-long-running `@hono/node-server` listener) as a second, broken function,
-and traffic randomly hitting it either hangs or crashes with
-`FUNCTION_INVOCATION_FAILED`.
+Vercel has zero-config framework detection for Hono: it finds the exported
+`app` in `src/app.ts` and deploys it directly as a single serverless
+function serving the whole domain, so the app's own routes (`/health`,
+`/notes`, `/notes/:id`) work with no `/api` prefix — `api.whisper.beer/notes`,
+not `api.whisper.beer/api/notes`, since the subdomain already says "this is
+the API." No `vercel.json` or hand-rolled `api/[[...route]].ts` adapter is
+needed for this — adding one previously caused Vercel to build *two*
+competing functions (its own zero-config one plus ours), and separately,
+`src/index.ts` (the local dev entry, which just starts a long-running
+`@hono/node-server` listener rather than exporting a request handler) got
+swept up as a function too. If a request ever hit the wrong one, it hung
+or crashed with `FUNCTION_INVOCATION_FAILED`. Keep `src/index.ts` for local
+`npm run dev` only, and don't add an `api/` directory — the zero-config
+detection handles routing and the Node.js runtime already.
 
 1. Connect a Neon Postgres database to the project (Vercel Marketplace →
    Neon) — this sets `DATABASE_URL` automatically.
