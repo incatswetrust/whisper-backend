@@ -6,6 +6,13 @@ import { store } from './store.js';
 
 export const app = new Hono();
 
+// Burn-after-read notes must never be replayed from a cache — browsers,
+// CDNs, and proxies all default to caching bare GETs otherwise.
+app.use('*', async (c, next) => {
+  await next();
+  c.header('cache-control', 'no-store');
+});
+
 app.use(
   '*',
   cors({
