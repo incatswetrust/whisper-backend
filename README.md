@@ -25,9 +25,13 @@ Config is via env vars (see `src/config.ts`): `DATABASE_URL` (or
 `api/[[...route]].ts` wraps the same Hono app with `hono/vercel`'s `handle()`
 and forces the Node.js runtime (not Edge — password hashing needs
 `node:crypto`'s `scryptSync`, which Edge's Web Crypto subset doesn't have).
-No `vercel.json` rewrites needed: Vercel routes any `/api/*` request straight
-to that catch-all function, and the Hono app's routes are already defined
-with full `/api/...` paths.
+`vercel.json` rewrites every path to `/api`, since the file-based catch-all
+(`api/[[...route]].ts`) only matches `/api/*` on its own — without the
+rewrite, requests to `/` or any other non-`/api` path (health checks,
+`/favicon.ico`, ...) don't match any function and Vercel falls back to
+guessing, which fails with `FUNCTION_INVOCATION_FAILED`. The Hono app's own
+routes are still full `/api/...` paths, so this is purely about getting
+traffic to the function at all.
 
 1. Connect a Neon Postgres database to the project (Vercel Marketplace →
    Neon) — this sets `DATABASE_URL` automatically.
