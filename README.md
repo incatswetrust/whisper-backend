@@ -18,7 +18,10 @@ npm run build && npm start   # production (long-running Node process)
 
 Config is via env vars (see `src/config.ts`): `DATABASE_URL` (or
 `POSTGRES_URL`), `PORT`, `FRONTEND_ORIGIN` (comma-separated CORS allowlist),
-`TRUST_PROXY`, `MAX_ITEM_BYTES`, `DEFAULT_TTL_MINUTES`.
+`TRUST_PROXY`, `MAX_ITEM_BYTES`, `DEFAULT_TTL_MINUTES`, `RATE_LIMIT_POST_MAX`
+/ `RATE_LIMIT_POST_WINDOW_MS`, `RATE_LIMIT_GET_MAX` / `RATE_LIMIT_GET_WINDOW_MS`,
+`RATE_LIMIT_GET_NOTE_MAX` / `RATE_LIMIT_GET_NOTE_WINDOW_MS`, `CRON_SECRET`
+(gates `GET /internal/cleanup`, see below).
 
 ## Deploying to Vercel
 
@@ -83,7 +86,7 @@ the whole thing works cleanly with `curl --data-binary`.
 | `X-Password`       | optional password; required again to read                 |
 | `X-Views`          | max number of reads (default 1, or unlimited-ish if `X-TTL-Minutes` given without this) |
 | `X-TTL-Minutes`    | expire after N minutes regardless of views                |
-| `X-Allowed-IP`     | exact IP, IPv4 CIDR (`10.0.0.0/8`), or comma-separated list |
+| `X-Allowed-IP`     | exact IP, CIDR (IPv4 `10.0.0.0/8` or IPv6 `2001:db8::/32`), or comma-separated list |
 | `X-Filename`       | original filename, for downloads                          |
 | `X-Encrypted: client` | payload is already encrypted by the caller; server stores it opaquely |
 
@@ -139,14 +142,16 @@ recipient's read. Once views hit 0 or the TTL passes, the note is gone —
 
 ## Notes / current limitations
 
-- IP allowlist: exact match or IPv4 CIDR only (no IPv6 CIDR yet).
-- No auth, no rate limiting — it's an anonymous public API by design; put a
-  reverse proxy in front if you want rate limits, and set `TRUST_PROXY=true`
-  + review `X-Forwarded-For` handling in `src/ip.ts` if you do.
-- Expired rows aren't proactively swept — they're filtered out of every read
-  (`expires_at > now()`) and deleted the moment a note's last view is burned,
-  so an unread-but-expired note just sits inert until its next read attempt
-  deletes it. Add a Vercel Cron hitting a small cleanup query if you want
-  guaranteed prompt deletion regardless of reads.
+- IP allowlist: exact match or CIDR, IPv4 and IPv6.
+- No auth. Rate limiting is IP-keyed (`src/rateLimit.ts`, Postgres-backed
+  fixed windows) — it stops trivial POST spam and slows password
+  brute-forcing against one note, but not a determined IP-rotating
+  attacker; set `TRUST_PROXY=true` + review `X-Forwarded-For` handling in
+  `src/ip.ts` if you're behind a proxy that isn't Vercel's own edge.
+- Expired rows are still filtered out of every read (`expires_at > now()`)
+  and deleted the moment a note's last view is burned, but are now also
+  proactively swept by a daily Vercel Cron hitting `GET /internal/cleanup`
+  (see `vercel.json`), so an unread-but-expired note no longer waits on a
+  read attempt to actually disappear.
 - Not yet wired into `whisper-frontend` — the UI's create/view forms don't
   call this API yet, that's the next step.

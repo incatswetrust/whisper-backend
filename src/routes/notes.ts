@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { config } from '../config.js';
 import { store } from '../store.js';
 import { getClientIp, ipAllowed } from '../ip.js';
+import { rateLimit } from '../rateLimit.js';
 import {
   generateNoteKey,
   generateSalt,
@@ -30,6 +31,7 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
 
 notes.post(
   '/',
+  rateLimit({ windowMs: config.rateLimitPostWindowMs, max: config.rateLimitPostMax, keyPrefix: 'post' }),
   bodyLimit({
     maxSize: config.maxItemBytes,
     onError: (c) => c.json({ error: `payload exceeds max size of ${config.maxItemBytes} bytes` }, 413)
@@ -123,84 +125,101 @@ notes.post(
   }
 );
 
-notes.get('/:id', async (c) => {
-  const id = c.req.param('id');
-  const record = await store.get(id);
-  if (!record) {
-    return c.json({ error: 'not found or expired' }, 404);
-  }
-
-  if (record.allowedIp) {
-    const clientIp = getClientIp(c);
-    if (!ipAllowed(clientIp, record.allowedIp)) {
-      return c.json({ error: 'forbidden: source ip not allowed' }, 403);
+notes.get(
+  '/:id',
+  rateLimit({ windowMs: config.rateLimitGetWindowMs, max: config.rateLimitGetMax, keyPrefix: 'get' }),
+  // Tighter than the general GET limiter above, keyed on IP + note id, so a
+  // password brute-force against one specific note gets throttled hard
+  // without also punishing everyone else reading other notes.
+  rateLimit({
+    windowMs: config.rateLimitGetNoteWindowMs,
+    max: config.rateLimitGetNoteMax,
+    keyPrefix: 'get-note',
+    keySuffix: (c) => c.req.param('id') ?? ''
+  }),
+  async (c) => {
+    // Composing the handler with the untyped rateLimit middleware above
+    // widens Hono's inferred param type from the route-literal `string` to
+    // `string | undefined` — the id is always present for a matched `/:id`
+    // route at runtime, this fallback just satisfies the wider type.
+    const id = c.req.param('id') ?? '';
+    const record = await store.get(id);
+    if (!record) {
+      return c.json({ error: 'not found or expired' }, 404);
     }
-  }
 
-  const password = c.req.header('x-password') || undefined;
-  const key = c.req.query('key');
-
-  // Everything below only checks whether the request *would* be servable;
-  // the actual view is burned atomically, right before each response body
-  // is written, so a losing race never gets to see content.
-
-  if (record.clientEncrypted) {
-    if (record.hasPassword) {
-      if (!password) return c.json({ error: 'password required' }, 401);
-      if (!verifyPassword(password, record.salt!, record.passwordVerifier!)) {
-        return c.json({ error: 'invalid password' }, 401);
+    if (record.allowedIp) {
+      const clientIp = getClientIp(c);
+      if (!ipAllowed(clientIp, record.allowedIp)) {
+        return c.json({ error: 'forbidden: source ip not allowed' }, 403);
       }
     }
+
+    const password = c.req.header('x-password') || undefined;
+    const key = c.req.query('key');
+
+    // Everything below only checks whether the request *would* be servable;
+    // the actual view is burned atomically, right before each response body
+    // is written, so a losing race never gets to see content.
+
+    if (record.clientEncrypted) {
+      if (record.hasPassword) {
+        if (!password) return c.json({ error: 'password required' }, 401);
+        if (!verifyPassword(password, record.salt!, record.passwordVerifier!)) {
+          return c.json({ error: 'invalid password' }, 401);
+        }
+      }
+      const remaining = await store.burnView(id);
+      if (remaining === null) return c.json({ error: 'not found or expired' }, 404);
+      c.header('content-type', record.contentType);
+      if (record.filename) c.header('content-disposition', `attachment; filename="${sanitizeFilename(record.filename)}"`);
+      c.header('x-views-remaining', String(remaining));
+      return c.body(Uint8Array.from(record.ciphertext));
+    }
+
+    if (!key) {
+      // Raw ciphertext fetch: caller decrypts locally (openssl / Web Crypto),
+      // so the key/password never has to travel to the server on read.
+      const remaining = await store.burnView(id);
+      if (remaining === null) return c.json({ error: 'not found or expired' }, 404);
+      c.header('content-type', 'application/octet-stream');
+      c.header('x-alg', 'aes-256-gcm');
+      c.header('x-iv', record.iv.toString('base64url'));
+      c.header('x-auth-tag', record.authTag.toString('base64url'));
+      if (record.salt) c.header('x-salt', record.salt.toString('base64url'));
+      c.header('x-has-password', String(record.hasPassword));
+      c.header('x-views-remaining', String(remaining));
+      return c.body(Uint8Array.from(record.ciphertext));
+    }
+
+    if (record.hasPassword && !password) {
+      return c.json({ error: 'password required' }, 401);
+    }
+
+    let noteKey: Buffer;
+    try {
+      noteKey = keyFromBase64Url(key);
+    } catch {
+      return c.json({ error: 'malformed key' }, 400);
+    }
+
+    const finalKey = combineKey(noteKey, password, record.salt);
+    let envelope: Buffer;
+    try {
+      envelope = unseal({ ciphertext: record.ciphertext, iv: record.iv, authTag: record.authTag }, finalKey);
+    } catch {
+      return c.json({ error: 'decryption failed: wrong key and/or password' }, 400);
+    }
+
     const remaining = await store.burnView(id);
     if (remaining === null) return c.json({ error: 'not found or expired' }, 404);
-    c.header('content-type', record.contentType);
-    if (record.filename) c.header('content-disposition', `attachment; filename="${sanitizeFilename(record.filename)}"`);
+    const { filename, contentType, payload } = parseEnvelope(envelope);
+    c.header('content-type', contentType);
+    if (filename) c.header('content-disposition', `attachment; filename="${sanitizeFilename(filename)}"`);
     c.header('x-views-remaining', String(remaining));
-    return c.body(Uint8Array.from(record.ciphertext));
+    return c.body(Uint8Array.from(payload));
   }
-
-  if (!key) {
-    // Raw ciphertext fetch: caller decrypts locally (openssl / Web Crypto),
-    // so the key/password never has to travel to the server on read.
-    const remaining = await store.burnView(id);
-    if (remaining === null) return c.json({ error: 'not found or expired' }, 404);
-    c.header('content-type', 'application/octet-stream');
-    c.header('x-alg', 'aes-256-gcm');
-    c.header('x-iv', record.iv.toString('base64url'));
-    c.header('x-auth-tag', record.authTag.toString('base64url'));
-    if (record.salt) c.header('x-salt', record.salt.toString('base64url'));
-    c.header('x-has-password', String(record.hasPassword));
-    c.header('x-views-remaining', String(remaining));
-    return c.body(Uint8Array.from(record.ciphertext));
-  }
-
-  if (record.hasPassword && !password) {
-    return c.json({ error: 'password required' }, 401);
-  }
-
-  let noteKey: Buffer;
-  try {
-    noteKey = keyFromBase64Url(key);
-  } catch {
-    return c.json({ error: 'malformed key' }, 400);
-  }
-
-  const finalKey = combineKey(noteKey, password, record.salt);
-  let envelope: Buffer;
-  try {
-    envelope = unseal({ ciphertext: record.ciphertext, iv: record.iv, authTag: record.authTag }, finalKey);
-  } catch {
-    return c.json({ error: 'decryption failed: wrong key and/or password' }, 400);
-  }
-
-  const remaining = await store.burnView(id);
-  if (remaining === null) return c.json({ error: 'not found or expired' }, 404);
-  const { filename, contentType, payload } = parseEnvelope(envelope);
-  c.header('content-type', contentType);
-  if (filename) c.header('content-disposition', `attachment; filename="${sanitizeFilename(filename)}"`);
-  c.header('x-views-remaining', String(remaining));
-  return c.body(Uint8Array.from(payload));
-});
+);
 
 function sanitizeFilename(name: string): string {
   return name.replace(/["\r\n]/g, '_');
