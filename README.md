@@ -86,7 +86,7 @@ the whole thing works cleanly with `curl --data-binary`.
 | `X-Password`       | optional password; required again to read                 |
 | `X-Views`          | max number of reads (default 1, or unlimited-ish if `X-TTL-Minutes` given without this) |
 | `X-TTL-Minutes`    | expire after N minutes regardless of views                |
-| `X-Allowed-IP`     | exact IP, IPv4 CIDR (`10.0.0.0/8`), or comma-separated list |
+| `X-Allowed-IP`     | exact IP, CIDR (IPv4 `10.0.0.0/8` or IPv6 `2001:db8::/32`), or comma-separated list |
 | `X-Filename`       | original filename, for downloads                          |
 | `X-Encrypted: client` | payload is already encrypted by the caller; server stores it opaquely |
 
@@ -142,7 +142,7 @@ recipient's read. Once views hit 0 or the TTL passes, the note is gone —
 
 ## Notes / current limitations
 
-- IP allowlist: exact match or IPv4 CIDR only (no IPv6 CIDR yet).
+- IP allowlist: exact match or CIDR, IPv4 and IPv6.
 - No auth. Rate limiting is IP-keyed (`src/rateLimit.ts`, Postgres-backed
   fixed windows) — it stops trivial POST spam and slows password
   brute-forcing against one note, but not a determined IP-rotating
