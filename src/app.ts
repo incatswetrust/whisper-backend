@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { config } from './config.js';
 import { notes } from './routes/notes.js';
+import { internal } from './routes/internal.js';
 import { store } from './store.js';
 
 export const app = new Hono();
@@ -33,6 +34,7 @@ app.use(
 
 app.get('/health', async (c) => c.json(await store.stats()));
 app.route('/notes', notes);
+app.route('/internal', internal);
 
 // Vercel's zero-config Hono detection requires a default export.
 export default app;
